@@ -4,37 +4,56 @@ export async function POST(req: Request) {
   try {
     const { name, message } = await req.json();
 
-    const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are a helpful WhatsApp sales assistant. Reply briefly, naturally, and persuasively. Keep replies suitable for WhatsApp.',
-          },
-          {
-            role: 'user',
-            content: `Customer name: ${name}\nCustomer message: ${message}\nGenerate a friendly WhatsApp reply.`,
-          },
-        ],
-        temperature: 0.7,
-      }),
-    });
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { reply: '❌ OPENAI_API_KEY not found' },
+        { status: 500 }
+      );
+    }
+
+    const openaiRes = await fetch(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are a helpful WhatsApp sales assistant. Reply briefly and naturally.',
+            },
+            {
+              role: 'user',
+              content: `Customer name: ${name}\nMessage: ${message}`,
+            },
+          ],
+        }),
+      }
+    );
 
     const data = await openaiRes.json();
 
-    const reply =
-      data.choices?.[0]?.message?.content || 'Sorry, no reply could be generated.';
+    console.log('OpenAI response:', data); // 🔥 debug用
+
+    if (!data.choices) {
+      return NextResponse.json({
+        reply: '❌ OpenAI error: ' + JSON.stringify(data),
+      });
+    }
+
+    const reply = data.choices[0].message.content;
 
     return NextResponse.json({ reply });
   } catch (error) {
-    console.error('Generate reply error:', error);
-    return NextResponse.json({ reply: 'Failed to generate reply.' }, { status: 500 });
+    console.error(error);
+    return NextResponse.json(
+      { reply: '❌ Server error' },
+      { status: 500 }
+    );
   }
 }
