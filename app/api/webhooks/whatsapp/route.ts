@@ -1,74 +1,48 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { adminDb } from '@/lib/firebase-admin';
+import { NextResponse } from "next/server";
 
-export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const mode = url.searchParams.get('hub.mode');
-  const token = url.searchParams.get('hub.verify_token');
-  const challenge = url.searchParams.get('hub.challenge');
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
 
-  if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
-    return new NextResponse(challenge ?? '', { status: 200 });
+  const mode = searchParams.get("hub.mode");
+  const token = searchParams.get("hub.verify_token");
+  const challenge = searchParams.get("hub.challenge");
+
+  if (mode === "subscribe" && token === process.env.META_VERIFY_TOKEN) {
+    return new Response(challenge, { status: 200 });
   }
 
-  return NextResponse.json({ error: 'Verification failed' }, { status: 403 });
+  return new Response("Verification failed", { status: 403 });
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    if (!adminDb) {
-      return NextResponse.json(
-        { ok: false, error: 'Firebase Admin is not configured' },
-        { status: 500 },
-      );
+    console.log("🔥 FULL WEBHOOK BODY:", JSON.stringify(body, null, 2));
+
+    // 防止 undefined crash
+    const entry = body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+
+    const message = value?.messages?.[0];
+    const contact = value?.contacts?.[0];
+
+    if (message) {
+      const from = message.from;
+      const text = message.text?.body || "No text";
+      const name = contact?.profile?.name || "Unknown";
+
+      console.log("📩 Incoming Message:");
+      console.log("From:", from);
+      console.log("Name:", name);
+      console.log("Text:", text);
     }
 
-    const entries = body.entry ?? [];
-
-    for (const entry of entries) {
-      for (const change of entry.changes ?? []) {
-        const value = change.value;
-        const messages = value?.messages ?? [];
-        const contacts = value?.contacts ?? [];
-
-        for (const message of messages) {
-          const waId = message.from;
-          const text = message.text?.body ?? '';
-          const profileName = contacts.find((c: any) => c.wa_id === waId)?.profile?.name ?? 'Unknown';
-
-          const convRef = adminDb.collection('conversations').doc(waId);
-          await convRef.set(
-            {
-              phone: waId,
-              contactName: profileName,
-              channel: 'whatsapp',
-              userId: 'demo-user',
-              lastMessageText: text,
-              lastMessageDirection: 'inbound',
-              lastMessageAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-            { merge: true },
-          );
-
-          await convRef.collection('messages').add({
-            direction: 'inbound',
-            text,
-            type: message.type,
-            rawPayload: message,
-            createdAt: new Date().toISOString(),
-          });
-        }
-      }
-    }
-
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ success: true });
   } catch (error) {
-    return NextResponse.json(
-      { ok: false, error: error instanceof Error ? error.message : 'Unknown error' },
-      { status: 500 },
-    );
+    console.error("❌ Webhook Error:", error);
+    return NextResponse.json({ error: "Webhook failed" }, { status: 200 }); 
+    // ⚠️ 一定要 return 200，不然 Meta 会一直 retry
   }
 }
