@@ -61,6 +61,13 @@ export async function getLeads(userId: string): Promise<Lead[]> {
     });
 }
 
+/**
+ * 兼容页面里现有的 import { fetchLeads }
+ */
+export async function fetchLeads(userId: string): Promise<Lead[]> {
+  return getLeads(userId);
+}
+
 export async function addLead(
   userId: string,
   payload: Omit<Lead, "id" | "userId" | "createdAt">
@@ -77,6 +84,16 @@ export async function updateLead(
   payload: Partial<Omit<Lead, "id" | "userId" | "createdAt">>
 ) {
   return updateDoc(doc(db, "leads", leadId), payload);
+}
+
+/**
+ * 兼容页面里现有的 import { updateLeadStatus }
+ */
+export async function updateLeadStatus(leadId: string, status: string) {
+  return updateDoc(doc(db, "leads", leadId), {
+    status,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 export async function deleteLead(leadId: string) {
