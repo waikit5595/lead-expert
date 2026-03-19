@@ -78,13 +78,19 @@ export default function InboxPage() {
     return messages.filter((m) => m.from === selectedPhone).slice().reverse();
   }, [messages, selectedPhone]);
 
+  // 右边显示不用强依赖 contacts
+  const selectedConversation = useMemo(() => {
+    if (!selectedPhone) return null;
+    return conversations.find((c) => c.from === selectedPhone) || null;
+  }, [selectedPhone, conversations]);
+
   const selectedContact = useMemo(() => {
     if (!selectedPhone) return null;
-    return contacts.find((c) => c.phone === selectedPhone) || null;
+    return contacts.find((c) => String(c.phone) === String(selectedPhone)) || null;
   }, [selectedPhone, contacts]);
 
   async function generateReply() {
-    if (!selectedContact) return;
+    if (!selectedConversation) return;
 
     const latestInbound =
       [...selectedConversationMessages]
@@ -102,7 +108,7 @@ export default function InboxPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: selectedContact.name,
+          name: selectedConversation.name,
           message: latestInbound.text,
         }),
       });
@@ -118,7 +124,7 @@ export default function InboxPage() {
   }
 
   async function sendReply() {
-    if (!selectedContact || !reply.trim()) return;
+    if (!selectedConversation || !reply.trim()) return;
 
     try {
       setSendingReply(true);
@@ -127,9 +133,9 @@ export default function InboxPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          to: selectedContact.phone,
+          to: selectedConversation.from,
           message: reply,
-          name: selectedContact.name,
+          name: selectedConversation.name,
         }),
       });
 
@@ -153,7 +159,10 @@ export default function InboxPage() {
   async function updateContactType(
     type: 'unknown' | 'lead' | 'customer' | 'personal'
   ) {
-    if (!selectedContact) return;
+    if (!selectedContact) {
+      alert('This conversation has no contact record yet. Send/receive one more message first.');
+      return;
+    }
 
     const autoReplyEnabled = type === 'lead' || type === 'customer';
 
@@ -164,7 +173,10 @@ export default function InboxPage() {
   }
 
   async function toggleAutoReply() {
-    if (!selectedContact) return;
+    if (!selectedContact) {
+      alert('This conversation has no contact record yet.');
+      return;
+    }
 
     await updateDoc(doc(db, 'contacts', selectedContact.id), {
       autoReplyEnabled: !selectedContact.autoReplyEnabled,
@@ -183,6 +195,7 @@ export default function InboxPage() {
       <h1 className="text-2xl font-bold mb-6">WhatsApp Inbox</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] gap-6 h-[calc(100%-56px)]">
+        {/* 左边 */}
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
           <div className="px-4 py-3 border-b">
             <h2 className="font-semibold">Conversations</h2>
@@ -196,11 +209,12 @@ export default function InboxPage() {
               <div className="text-sm text-gray-500">No conversations yet...</div>
             ) : (
               conversations.map((msg) => {
-                const c = contacts.find((x) => x.phone === msg.from);
+                const c = contacts.find((x) => String(x.phone) === String(msg.from));
 
                 return (
                   <button
                     key={msg.from}
+                    type="button"
                     onClick={() => {
                       setSelectedPhone(msg.from);
                       setReply('');
@@ -227,21 +241,22 @@ export default function InboxPage() {
           </div>
         </div>
 
+        {/* 右边 */}
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
-          {selectedContact ? (
+          {selectedConversation ? (
             <>
               <div className="px-5 py-4 border-b space-y-3">
                 <div>
-                  <h2 className="font-semibold text-lg">{selectedContact.name}</h2>
-                  <p className="text-sm text-gray-500">{selectedContact.phone}</p>
+                  <h2 className="font-semibold text-lg">{selectedConversation.name}</h2>
+                  <p className="text-sm text-gray-500">{selectedConversation.from}</p>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <span className={`text-xs px-2 py-1 rounded-full ${typeBadge(selectedContact.type)}`}>
-                    {selectedContact.type || 'unknown'}
+                  <span className={`text-xs px-2 py-1 rounded-full ${typeBadge(selectedContact?.type)}`}>
+                    {selectedContact?.type || 'unknown'}
                   </span>
                   <span className="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-700">
-                    Auto Reply: {selectedContact.autoReplyEnabled ? 'ON' : 'OFF'}
+                    Auto Reply: {selectedContact?.autoReplyEnabled ? 'ON' : 'OFF'}
                   </span>
                 </div>
 
