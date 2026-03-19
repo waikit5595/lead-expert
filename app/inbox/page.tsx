@@ -2,7 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
+import {
+  collection,
+  onSnapshot,
+  orderBy,
+  query,
+  updateDoc,
+  doc,
+} from 'firebase/firestore';
 
 type Message = {
   id: string;
@@ -12,8 +19,17 @@ type Message = {
   direction?: 'inbound' | 'outbound';
 };
 
+type Contact = {
+  id: string;
+  phone: string;
+  name: string;
+  type?: 'unknown' | 'lead' | 'customer' | 'personal';
+  autoReplyEnabled?: boolean;
+};
+
 export default function InboxPage() {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
   const [reply, setReply] = useState('');
   const [loadingReply, setLoadingReply] = useState(false);
@@ -33,6 +49,18 @@ export default function InboxPage() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = onSnapshot(collection(db, 'contacts'), (snapshot) => {
+      const data: Contact[] = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...(doc.data() as any),
+      }));
+      setContacts(data);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   const conversations = useMemo(() => {
     const map = new Map<string, Message>();
 
@@ -47,17 +75,13 @@ export default function InboxPage() {
 
   const selectedConversationMessages = useMemo(() => {
     if (!selectedPhone) return [];
-
-    return messages
-      .filter((m) => m.from === selectedPhone)
-      .slice()
-      .reverse();
+    return messages.filter((m) => m.from === selectedPhone).slice().reverse();
   }, [messages, selectedPhone]);
 
   const selectedContact = useMemo(() => {
     if (!selectedPhone) return null;
-    return conversations.find((c) => c.from === selectedPhone) || null;
-  }, [selectedPhone, conversations]);
+    return contacts.find((c) => c.phone === selectedPhone) || null;
+  }, [selectedPhone, contacts]);
 
   async function generateReply() {
     if (!selectedContact) return;
@@ -103,7 +127,7 @@ export default function InboxPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          to: selectedContact.from,
+          to: selectedContact.phone,
           message: reply,
           name: selectedContact.name,
         }),
@@ -126,12 +150,39 @@ export default function InboxPage() {
     }
   }
 
+  async function updateContactType(
+    type: 'unknown' | 'lead' | 'customer' | 'personal'
+  ) {
+    if (!selectedContact) return;
+
+    const autoReplyEnabled = type === 'lead' || type === 'customer';
+
+    await updateDoc(doc(db, 'contacts', selectedContact.id), {
+      type,
+      autoReplyEnabled,
+    });
+  }
+
+  async function toggleAutoReply() {
+    if (!selectedContact) return;
+
+    await updateDoc(doc(db, 'contacts', selectedContact.id), {
+      autoReplyEnabled: !selectedContact.autoReplyEnabled,
+    });
+  }
+
+  function typeBadge(type?: string) {
+    if (type === 'lead') return 'bg-blue-100 text-blue-700';
+    if (type === 'customer') return 'bg-green-100 text-green-700';
+    if (type === 'personal') return 'bg-gray-200 text-gray-700';
+    return 'bg-yellow-100 text-yellow-700';
+  }
+
   return (
     <div className="p-6 h-[calc(100vh-40px)]">
       <h1 className="text-2xl font-bold mb-6">WhatsApp Inbox</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] gap-6 h-[calc(100%-56px)]">
-        {/* 左边会话列表 */}
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
           <div className="px-4 py-3 border-b">
             <h2 className="font-semibold">Conversations</h2>
@@ -144,36 +195,88 @@ export default function InboxPage() {
             {conversations.length === 0 ? (
               <div className="text-sm text-gray-500">No conversations yet...</div>
             ) : (
-              conversations.map((msg) => (
-                <button
-                  key={msg.from}
-                  onClick={() => {
-                    setSelectedPhone(msg.from);
-                    setReply('');
-                  }}
-                  className={`w-full text-left border rounded-xl p-4 transition ${
-                    selectedPhone === msg.from
-                      ? 'bg-blue-100 border-blue-300'
-                      : 'bg-white hover:bg-gray-50'
-                  }`}
-                >
-                  <div className="text-sm text-gray-500">
-                    {msg.name} ({msg.from})
-                  </div>
-                  <div className="mt-2 font-medium line-clamp-2">{msg.text}</div>
-                </button>
-              ))
+              conversations.map((msg) => {
+                const c = contacts.find((x) => x.phone === msg.from);
+
+                return (
+                  <button
+                    key={msg.from}
+                    onClick={() => {
+                      setSelectedPhone(msg.from);
+                      setReply('');
+                    }}
+                    className={`w-full text-left border rounded-xl p-4 transition ${
+                      selectedPhone === msg.from
+                        ? 'bg-blue-100 border-blue-300'
+                        : 'bg-white hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm text-gray-500">
+                        {msg.name} ({msg.from})
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded-full ${typeBadge(c?.type)}`}>
+                        {c?.type || 'unknown'}
+                      </span>
+                    </div>
+                    <div className="mt-2 font-medium line-clamp-2">{msg.text}</div>
+                  </button>
+                );
+              })
             )}
           </div>
         </div>
 
-        {/* 右边聊天详情 */}
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
           {selectedContact ? (
             <>
-              <div className="px-5 py-4 border-b">
-                <h2 className="font-semibold text-lg">{selectedContact.name}</h2>
-                <p className="text-sm text-gray-500">{selectedContact.from}</p>
+              <div className="px-5 py-4 border-b space-y-3">
+                <div>
+                  <h2 className="font-semibold text-lg">{selectedContact.name}</h2>
+                  <p className="text-sm text-gray-500">{selectedContact.phone}</p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <span className={`text-xs px-2 py-1 rounded-full ${typeBadge(selectedContact.type)}`}>
+                    {selectedContact.type || 'unknown'}
+                  </span>
+                  <span className="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-700">
+                    Auto Reply: {selectedContact.autoReplyEnabled ? 'ON' : 'OFF'}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => updateContactType('lead')}
+                    className="px-3 py-1 border rounded-lg text-sm"
+                  >
+                    Mark as Lead
+                  </button>
+                  <button
+                    onClick={() => updateContactType('customer')}
+                    className="px-3 py-1 border rounded-lg text-sm"
+                  >
+                    Mark as Customer
+                  </button>
+                  <button
+                    onClick={() => updateContactType('personal')}
+                    className="px-3 py-1 border rounded-lg text-sm"
+                  >
+                    Mark as Personal
+                  </button>
+                  <button
+                    onClick={() => updateContactType('unknown')}
+                    className="px-3 py-1 border rounded-lg text-sm"
+                  >
+                    Set Unknown
+                  </button>
+                  <button
+                    onClick={toggleAutoReply}
+                    className="px-3 py-1 border rounded-lg text-sm"
+                  >
+                    Toggle Auto Reply
+                  </button>
+                </div>
               </div>
 
               <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-gray-50">

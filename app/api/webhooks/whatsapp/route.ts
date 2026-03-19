@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  collection,
+  addDoc,
+  serverTimestamp,
+  query,
+  where,
+  getDocs,
+  updateDoc,
+  doc,
+} from 'firebase/firestore';
+import { shouldAutoReply, type ContactType } from '@/lib/contact-rules';
 
 function getRuleBasedReply(text: string): string | null {
   const lower = text.toLowerCase().trim();
@@ -56,25 +66,26 @@ async function generateAIReply(name: string, text: string): Promise<string> {
     },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
+      temperature: 0.7,
       messages: [
         {
           role: 'system',
           content:
-            'You are a friendly WhatsApp sales assistant for a CRM system. Reply naturally, briefly, politely, and in the same language as the customer when possible. Keep replies short and WhatsApp-friendly.',
+            'You are a friendly WhatsApp sales assistant. Reply naturally, briefly, politely, and in the same language as the customer when possible. Keep replies short and WhatsApp-friendly.',
         },
         {
           role: 'user',
           content: `Customer name: ${name}\nCustomer message: ${text}\nGenerate a helpful WhatsApp reply.`,
         },
       ],
-      temperature: 0.7,
     }),
   });
 
   const data = await res.json();
-
-  const reply = data?.choices?.[0]?.message?.content?.trim();
-  return reply || '你好呀 😊 请问有什么我可以帮你的吗？';
+  return (
+    data?.choices?.[0]?.message?.content?.trim() ||
+    '你好呀 😊 请问有什么我可以帮你的吗？'
+  );
 }
 
 async function sendWhatsAppMessage(to: string, message: string) {
@@ -98,9 +109,7 @@ async function sendWhatsAppMessage(to: string, message: string) {
         messaging_product: 'whatsapp',
         to,
         type: 'text',
-        text: {
-          body: message,
-        },
+        text: { body: message },
       }),
     }
   );
@@ -112,6 +121,55 @@ async function sendWhatsAppMessage(to: string, message: string) {
   }
 
   return data;
+}
+
+type ContactRecord = {
+  id: string;
+  phone: string;
+  name: string;
+  type: ContactType;
+  autoReplyEnabled: boolean;
+};
+
+async function getOrCreateContact(phone: string, name: string): Promise<ContactRecord> {
+  const contactsRef = collection(db, 'contacts');
+  const q = query(contactsRef, where('phone', '==', phone));
+  const snap = await getDocs(q);
+
+  if (snap.empty) {
+    const docRef = await addDoc(contactsRef, {
+      phone,
+      name,
+      type: 'unknown',
+      autoReplyEnabled: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    return {
+      id: docRef.id,
+      phone,
+      name,
+      type: 'unknown',
+      autoReplyEnabled: false,
+    };
+  }
+
+  const existing = snap.docs[0];
+  const data = existing.data();
+
+  await updateDoc(doc(db, 'contacts', existing.id), {
+    name,
+    updatedAt: serverTimestamp(),
+  });
+
+  return {
+    id: existing.id,
+    phone: data.phone,
+    name: data.name || name,
+    type: (data.type || 'unknown') as ContactType,
+    autoReplyEnabled: Boolean(data.autoReplyEnabled),
+  };
 }
 
 export async function GET(req: Request) {
@@ -135,11 +193,9 @@ export async function POST(req: Request) {
     const entry = body.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
-
     const message = value?.messages?.[0];
     const contact = value?.contacts?.[0];
 
-    // 没有消息事件时，直接返回成功，避免 Meta 重试
     if (!message) {
       return NextResponse.json({ success: true });
     }
@@ -148,9 +204,7 @@ export async function POST(req: Request) {
     const text: string = message.text?.body || 'No text';
     const name: string = contact?.profile?.name || 'Unknown';
 
-    console.log('📩 Incoming message:', { from, name, text });
-
-    // 1. 存 inbound 消息
+    // 存 inbound
     await addDoc(collection(db, 'messages'), {
       from,
       name,
@@ -159,8 +213,19 @@ export async function POST(req: Request) {
       createdAt: serverTimestamp(),
     });
 
-    // 2. 优先规则回复，否则走 AI
-    let reply: string | null = getRuleBasedReply(text);
+    // 第一次来先建联系人，默认 unknown
+    const contactRecord = await getOrCreateContact(from, name);
+
+    // 只有 lead / customer 且 autoReplyEnabled=true 才自动回复
+    if (!shouldAutoReply(contactRecord.type) || !contactRecord.autoReplyEnabled) {
+      return NextResponse.json({
+        success: true,
+        skipped: true,
+        reason: `No auto-reply for contact type: ${contactRecord.type}`,
+      });
+    }
+
+    let reply = getRuleBasedReply(text);
 
     if (!reply) {
       reply = await generateAIReply(name, text);
@@ -170,12 +235,9 @@ export async function POST(req: Request) {
       reply = '你好呀 👋 请问有什么我可以帮你的吗？';
     }
 
-    console.log('🤖 Auto reply:', reply);
-
-    // 3. 自动发送 WhatsApp
     await sendWhatsAppMessage(from, reply);
 
-    // 4. 存 outbound 消息
+    // 存 outbound
     await addDoc(collection(db, 'messages'), {
       from,
       name,
@@ -187,7 +249,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('❌ Webhook Error:', error);
-    // 返回 200，避免 Meta 一直重复重试
     return NextResponse.json({ success: true });
   }
 }
