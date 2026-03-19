@@ -2,10 +2,15 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/firebase';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
-function getRuleBasedReply(text: string) {
+function getRuleBasedReply(text: string): string | null {
   const lower = text.toLowerCase().trim();
 
-  if (lower.includes('hi') || lower.includes('hello') || lower.includes('你好') || lower.includes('哈喽')) {
+  if (
+    lower.includes('hi') ||
+    lower.includes('hello') ||
+    lower.includes('你好') ||
+    lower.includes('哈喽')
+  ) {
     return '你好呀 👋 很高兴收到你的消息，请问有什么我可以帮你的吗？';
   }
 
@@ -15,7 +20,7 @@ function getRuleBasedReply(text: string) {
     lower.includes('价钱') ||
     lower.includes('价格')
   ) {
-    return '当然可以 😊 请告诉我你想了解哪一个项目/服务，我可以把价格和详情发给你。';
+    return '当然可以 😊 请告诉我你想了解哪一个项目或服务，我可以把价格和详情发给你。';
   }
 
   if (
@@ -24,7 +29,7 @@ function getRuleBasedReply(text: string) {
     lower.includes('地址') ||
     lower.includes('哪里')
   ) {
-    return '可以的📍 请告诉我你想了解哪一个项目/服务，我会把地点和相关资料发给你。';
+    return '可以的 📍 请告诉我你想了解哪一个项目或服务，我会把地点和相关资料发给你。';
   }
 
   if (
@@ -38,7 +43,7 @@ function getRuleBasedReply(text: string) {
   return null;
 }
 
-async function generateAIReply(name: string, text: string) {
+async function generateAIReply(name: string, text: string): Promise<string> {
   if (!process.env.OPENAI_API_KEY) {
     return '你好呀 😊 请问有什么我可以帮你的吗？';
   }
@@ -117,7 +122,7 @@ export async function GET(req: Request) {
   const challenge = searchParams.get('hub.challenge');
 
   if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
-    return new Response(challenge, { status: 200 });
+    return new Response(challenge || '', { status: 200 });
   }
 
   return new Response('Verification failed', { status: 403 });
@@ -134,17 +139,18 @@ export async function POST(req: Request) {
     const message = value?.messages?.[0];
     const contact = value?.contacts?.[0];
 
+    // 没有消息事件时，直接返回成功，避免 Meta 重试
     if (!message) {
       return NextResponse.json({ success: true });
     }
 
-    const from = message.from;
-    const text = message.text?.body || 'No text';
-    const name = contact?.profile?.name || 'Unknown';
+    const from: string = message.from;
+    const text: string = message.text?.body || 'No text';
+    const name: string = contact?.profile?.name || 'Unknown';
 
     console.log('📩 Incoming message:', { from, name, text });
 
-    // 1. 先存 incoming
+    // 1. 存 inbound 消息
     await addDoc(collection(db, 'messages'), {
       from,
       name,
@@ -153,11 +159,15 @@ export async function POST(req: Request) {
       createdAt: serverTimestamp(),
     });
 
-    // 2. 生成回复：优先规则，其次 AI
-    let reply = getRuleBasedReply(text);
+    // 2. 优先规则回复，否则走 AI
+    let reply: string | null = getRuleBasedReply(text);
 
     if (!reply) {
       reply = await generateAIReply(name, text);
+    }
+
+    if (!reply) {
+      reply = '你好呀 👋 请问有什么我可以帮你的吗？';
     }
 
     console.log('🤖 Auto reply:', reply);
@@ -165,7 +175,7 @@ export async function POST(req: Request) {
     // 3. 自动发送 WhatsApp
     await sendWhatsAppMessage(from, reply);
 
-    // 4. 再存 outgoing
+    // 4. 存 outbound 消息
     await addDoc(collection(db, 'messages'), {
       from,
       name,
@@ -177,6 +187,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('❌ Webhook Error:', error);
+    // 返回 200，避免 Meta 一直重复重试
     return NextResponse.json({ success: true });
   }
 }
