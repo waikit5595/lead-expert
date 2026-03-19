@@ -34,6 +34,7 @@ export default function InboxPage() {
   const [reply, setReply] = useState('');
   const [loadingReply, setLoadingReply] = useState(false);
   const [sendingReply, setSendingReply] = useState(false);
+  const [savingContact, setSavingContact] = useState(false);
 
   useEffect(() => {
     const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'));
@@ -78,7 +79,6 @@ export default function InboxPage() {
     return messages.filter((m) => m.from === selectedPhone).slice().reverse();
   }, [messages, selectedPhone]);
 
-  // 右边显示不用强依赖 contacts
   const selectedConversation = useMemo(() => {
     if (!selectedPhone) return null;
     return conversations.find((c) => c.from === selectedPhone) || null;
@@ -156,31 +156,73 @@ export default function InboxPage() {
     }
   }
 
+  async function ensureContactRecord() {
+    if (!selectedConversation) return null;
+    if (selectedContact?.id) return selectedContact.id;
+
+    const res = await fetch('/api/create-contact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: selectedConversation.from,
+        name: selectedConversation.name,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!data.success || !data.id) {
+      throw new Error('Failed to create contact');
+    }
+
+    return data.id as string;
+  }
+
   async function updateContactType(
     type: 'unknown' | 'lead' | 'customer' | 'personal'
   ) {
-    if (!selectedContact) {
-      alert('This conversation has no contact record yet. Send/receive one more message first.');
-      return;
+    if (!selectedConversation) return;
+
+    try {
+      setSavingContact(true);
+
+      const contactId = await ensureContactRecord();
+      if (!contactId) return;
+
+      const autoReplyEnabled = type === 'lead' || type === 'customer';
+
+      await updateDoc(doc(db, 'contacts', contactId), {
+        type,
+        autoReplyEnabled,
+      });
+    } catch (error) {
+      console.error(error);
+      alert('❌ Failed to update contact type');
+    } finally {
+      setSavingContact(false);
     }
-
-    const autoReplyEnabled = type === 'lead' || type === 'customer';
-
-    await updateDoc(doc(db, 'contacts', selectedContact.id), {
-      type,
-      autoReplyEnabled,
-    });
   }
 
   async function toggleAutoReply() {
-    if (!selectedContact) {
-      alert('This conversation has no contact record yet.');
-      return;
-    }
+    if (!selectedConversation) return;
 
-    await updateDoc(doc(db, 'contacts', selectedContact.id), {
-      autoReplyEnabled: !selectedContact.autoReplyEnabled,
-    });
+    try {
+      setSavingContact(true);
+
+      const contactId = await ensureContactRecord();
+      if (!contactId) return;
+
+      const currentValue = Boolean(selectedContact?.autoReplyEnabled);
+
+      await updateDoc(doc(db, 'contacts', contactId), {
+        autoReplyEnabled: !currentValue,
+      });
+    } catch (error) {
+      console.error(error);
+      alert('❌ Failed to toggle auto reply');
+    } finally {
+      setSavingContact(false);
+    }
   }
 
   function typeBadge(type?: string) {
@@ -195,7 +237,6 @@ export default function InboxPage() {
       <h1 className="text-2xl font-bold mb-6">WhatsApp Inbox</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] gap-6 h-[calc(100%-56px)]">
-        {/* 左边 */}
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
           <div className="px-4 py-3 border-b">
             <h2 className="font-semibold">Conversations</h2>
@@ -241,7 +282,6 @@ export default function InboxPage() {
           </div>
         </div>
 
-        {/* 右边 */}
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
           {selectedConversation ? (
             <>
@@ -263,33 +303,38 @@ export default function InboxPage() {
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => updateContactType('lead')}
-                    className="px-3 py-1 border rounded-lg text-sm"
+                    disabled={savingContact}
+                    className="px-3 py-1 border rounded-lg text-sm disabled:opacity-50"
                   >
                     Mark as Lead
                   </button>
                   <button
                     onClick={() => updateContactType('customer')}
-                    className="px-3 py-1 border rounded-lg text-sm"
+                    disabled={savingContact}
+                    className="px-3 py-1 border rounded-lg text-sm disabled:opacity-50"
                   >
                     Mark as Customer
                   </button>
                   <button
                     onClick={() => updateContactType('personal')}
-                    className="px-3 py-1 border rounded-lg text-sm"
+                    disabled={savingContact}
+                    className="px-3 py-1 border rounded-lg text-sm disabled:opacity-50"
                   >
                     Mark as Personal
                   </button>
                   <button
                     onClick={() => updateContactType('unknown')}
-                    className="px-3 py-1 border rounded-lg text-sm"
+                    disabled={savingContact}
+                    className="px-3 py-1 border rounded-lg text-sm disabled:opacity-50"
                   >
                     Set Unknown
                   </button>
                   <button
                     onClick={toggleAutoReply}
-                    className="px-3 py-1 border rounded-lg text-sm"
+                    disabled={savingContact}
+                    className="px-3 py-1 border rounded-lg text-sm disabled:opacity-50"
                   >
-                    Toggle Auto Reply
+                    {savingContact ? 'Saving...' : 'Toggle Auto Reply'}
                   </button>
                 </div>
               </div>
