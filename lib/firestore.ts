@@ -61,20 +61,34 @@ export async function getLeads(userId: string): Promise<Lead[]> {
     });
 }
 
-/**
- * 兼容页面里现有的 import { fetchLeads }
- */
 export async function fetchLeads(userId: string): Promise<Lead[]> {
   return getLeads(userId);
 }
 
+type AddLeadPayload = Omit<Lead, "id" | "createdAt">;
+
 export async function addLead(
   userId: string,
   payload: Omit<Lead, "id" | "userId" | "createdAt">
+): Promise<any>;
+export async function addLead(payload: AddLeadPayload): Promise<any>;
+export async function addLead(
+  userIdOrPayload: string | AddLeadPayload,
+  maybePayload?: Omit<Lead, "id" | "userId" | "createdAt">
 ) {
+  let finalPayload: Record<string, unknown>;
+
+  if (typeof userIdOrPayload === "string") {
+    finalPayload = {
+      ...(maybePayload ?? {}),
+      userId: userIdOrPayload,
+    };
+  } else {
+    finalPayload = { ...userIdOrPayload };
+  }
+
   return addDoc(collection(db, "leads"), {
-    ...payload,
-    userId,
+    ...finalPayload,
     createdAt: serverTimestamp(),
   });
 }
@@ -86,9 +100,6 @@ export async function updateLead(
   return updateDoc(doc(db, "leads", leadId), payload);
 }
 
-/**
- * 兼容页面里现有的 import { updateLeadStatus }
- */
 export async function updateLeadStatus(leadId: string, status: string) {
   return updateDoc(doc(db, "leads", leadId), {
     status,
