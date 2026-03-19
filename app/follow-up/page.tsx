@@ -32,7 +32,7 @@ type FollowUpItem = {
   type: string;
   daysSinceInbound: number;
   lastInboundText: string;
-  lastInboundAt: number;
+  latestInboundAt: number;
 };
 
 function toMillis(value: any): number {
@@ -127,11 +127,8 @@ export default function FollowUpPage() {
 
       const latestInboundAt = toMillis(latestInbound.createdAt);
       const latestOutboundAt = latestOutbound ? toMillis(latestOutbound.createdAt) : 0;
-
-      // 只列出：对方最后一次来讯息后，我们还没继续推进很久的客户
       const daysSinceInbound = daysBetween(latestInboundAt, now);
 
-      // 如果我们最后发出的消息比对方新，而且是最近发的，就不急着跟进
       if (latestOutboundAt > latestInboundAt && daysBetween(latestOutboundAt, now) < minDays) {
         continue;
       }
@@ -144,7 +141,7 @@ export default function FollowUpPage() {
         type: contact.type || 'lead',
         daysSinceInbound,
         lastInboundText: latestInbound.text,
-        lastInboundAt,
+        latestInboundAt,
       });
     }
 
