@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
 
 type Message = {
   id: string;
@@ -16,8 +16,8 @@ export default function InboxPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
   const [reply, setReply] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [loadingReply, setLoadingReply] = useState(false);
+  const [sendingReply, setSendingReply] = useState(false);
 
   useEffect(() => {
     const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'));
@@ -47,6 +47,7 @@ export default function InboxPage() {
 
   const selectedConversationMessages = useMemo(() => {
     if (!selectedPhone) return [];
+
     return messages
       .filter((m) => m.from === selectedPhone)
       .slice()
@@ -64,12 +65,13 @@ export default function InboxPage() {
     const latestInbound =
       [...selectedConversationMessages]
         .reverse()
-        .find((m) => m.direction !== 'outbound') || selectedConversationMessages[selectedConversationMessages.length - 1];
+        .find((m) => m.direction !== 'outbound') ||
+      selectedConversationMessages[selectedConversationMessages.length - 1];
 
     if (!latestInbound) return;
 
     try {
-      setLoading(true);
+      setLoadingReply(true);
       setReply('');
 
       const res = await fetch('/api/generate-reply', {
@@ -87,15 +89,15 @@ export default function InboxPage() {
       console.error(error);
       setReply('Failed to generate reply');
     } finally {
-      setLoading(false);
+      setLoadingReply(false);
     }
   }
 
-  async function sendWhatsAppReply() {
-    if (!selectedContact || !reply) return;
+  async function sendReply() {
+    if (!selectedContact || !reply.trim()) return;
 
     try {
-      setSending(true);
+      setSendingReply(true);
 
       const res = await fetch('/api/send-whatsapp', {
         method: 'POST',
@@ -120,95 +122,124 @@ export default function InboxPage() {
       console.error(error);
       alert('❌ Failed to send');
     } finally {
-      setSending(false);
+      setSendingReply(false);
     }
   }
 
   return (
-    <div className="p-6 grid grid-cols-2 gap-6">
-      <div>
-        <h1 className="text-2xl font-bold mb-4">WhatsApp Inbox</h1>
+    <div className="p-6 h-[calc(100vh-40px)]">
+      <h1 className="text-2xl font-bold mb-6">WhatsApp Inbox</h1>
 
-        {conversations.length === 0 ? (
-          <p>No messages yet...</p>
-        ) : (
-          <div className="space-y-3">
-            {conversations.map((msg) => (
-              <div
-                key={msg.from}
-                onClick={() => {
-                  setSelectedPhone(msg.from);
-                  setReply('');
-                }}
-                className={`border rounded-lg p-4 cursor-pointer ${
-                  selectedPhone === msg.from ? 'bg-blue-100' : 'bg-white'
-                }`}
-              >
-                <div className="text-sm text-gray-500">
-                  {msg.name} ({msg.from})
-                </div>
-                <div className="mt-2 text-lg">{msg.text}</div>
-              </div>
-            ))}
+      <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] gap-6 h-[calc(100%-56px)]">
+        {/* 左边会话列表 */}
+        <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
+          <div className="px-4 py-3 border-b">
+            <h2 className="font-semibold">Conversations</h2>
+            <p className="text-sm text-gray-500">
+              {conversations.length} conversation{conversations.length === 1 ? '' : 's'}
+            </p>
           </div>
-        )}
-      </div>
 
-      <div>
-        <h2 className="text-2xl font-bold mb-4">Conversation</h2>
-
-        {selectedContact ? (
-          <div className="space-y-4">
-            <div className="border rounded-lg p-4 bg-white space-y-3 max-h-[420px] overflow-y-auto">
-              <p className="text-gray-500">
-                {selectedContact.name} ({selectedContact.from})
-              </p>
-
-              {selectedConversationMessages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`p-3 rounded-lg max-w-[85%] ${
-                    msg.direction === 'outbound'
-                      ? 'ml-auto bg-green-100'
-                      : 'mr-auto bg-gray-100'
+          <div className="overflow-y-auto flex-1 p-3 space-y-3">
+            {conversations.length === 0 ? (
+              <div className="text-sm text-gray-500">No conversations yet...</div>
+            ) : (
+              conversations.map((msg) => (
+                <button
+                  key={msg.from}
+                  onClick={() => {
+                    setSelectedPhone(msg.from);
+                    setReply('');
+                  }}
+                  className={`w-full text-left border rounded-xl p-4 transition ${
+                    selectedPhone === msg.from
+                      ? 'bg-blue-100 border-blue-300'
+                      : 'bg-white hover:bg-gray-50'
                   }`}
                 >
-                  <div className="text-xs text-gray-500 mb-1">
-                    {msg.direction === 'outbound' ? 'You' : msg.name}
+                  <div className="text-sm text-gray-500">
+                    {msg.name} ({msg.from})
                   </div>
-                  <div>{msg.text}</div>
-                </div>
-              ))}
-            </div>
+                  <div className="mt-2 font-medium line-clamp-2">{msg.text}</div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
 
-            <div className="border rounded-lg p-4 bg-white space-y-4">
-              <button
-                onClick={generateReply}
-                disabled={loading}
-                className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
-              >
-                {loading ? 'Generating...' : 'Generate AI Reply'}
-              </button>
+        {/* 右边聊天详情 */}
+        <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
+          {selectedContact ? (
+            <>
+              <div className="px-5 py-4 border-b">
+                <h2 className="font-semibold text-lg">{selectedContact.name}</h2>
+                <p className="text-sm text-gray-500">{selectedContact.from}</p>
+              </div>
 
-              {reply && (
-                <div className="border rounded p-3 bg-gray-50 space-y-3">
-                  <p className="text-sm text-gray-500 mb-2">AI Reply</p>
-                  <p>{reply}</p>
-
-                  <button
-                    onClick={sendWhatsAppReply}
-                    disabled={sending}
-                    className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50"
+              <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-gray-50">
+                {selectedConversationMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm ${
+                      msg.direction === 'outbound'
+                        ? 'ml-auto bg-green-100'
+                        : 'mr-auto bg-white'
+                    }`}
                   >
-                    {sending ? 'Sending...' : 'Send to WhatsApp'}
+                    <div className="text-xs text-gray-500 mb-1">
+                      {msg.direction === 'outbound' ? 'You' : msg.name}
+                    </div>
+                    <div className="whitespace-pre-wrap break-words">{msg.text}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-t p-5 space-y-4">
+                <div className="flex gap-3 flex-wrap">
+                  <button
+                    onClick={generateReply}
+                    disabled={loadingReply}
+                    className="px-4 py-2 rounded-lg bg-black text-white disabled:opacity-50"
+                  >
+                    {loadingReply ? 'Generating...' : 'Generate AI Reply'}
                   </button>
                 </div>
-              )}
+
+                <div>
+                  <label className="block text-sm text-gray-500 mb-2">Reply Draft</label>
+                  <textarea
+                    value={reply}
+                    onChange={(e) => setReply(e.target.value)}
+                    placeholder="Generate or type a reply here..."
+                    className="w-full min-h-[140px] border rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-200"
+                  />
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={sendReply}
+                    disabled={sendingReply || !reply.trim()}
+                    className="px-4 py-2 rounded-lg bg-green-600 text-white disabled:opacity-50"
+                  >
+                    {sendingReply ? 'Sending...' : 'Send to WhatsApp'}
+                  </button>
+
+                  <button
+                    onClick={() => setReply('')}
+                    disabled={!reply}
+                    className="px-4 py-2 rounded-lg border disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="h-full flex items-center justify-center text-gray-500">
+              Select a conversation
             </div>
-          </div>
-        ) : (
-          <p>Select a conversation</p>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
