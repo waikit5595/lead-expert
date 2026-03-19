@@ -16,6 +16,7 @@ export default function InboxPage() {
   const [selected, setSelected] = useState<Message | null>(null);
   const [reply, setReply] = useState('');
   const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'));
@@ -59,40 +60,79 @@ export default function InboxPage() {
     }
   }
 
+  async function sendWhatsAppReply() {
+    if (!selected || !reply) return;
+
+    try {
+      setSending(true);
+
+      const res = await fetch('/api/send-whatsapp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          to: selected.from,
+          message: reply,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        alert(`❌ Failed to send: ${data.error || 'Unknown error'}`);
+        return;
+      }
+
+      alert('✅ Sent to WhatsApp');
+    } catch (error) {
+      console.error(error);
+      alert('❌ Failed to send');
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <div className="p-6 grid grid-cols-2 gap-6">
       <div>
-        <h1 className="text-xl font-bold mb-4">WhatsApp Inbox</h1>
+        <h1 className="text-2xl font-bold mb-4">WhatsApp Inbox</h1>
 
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            onClick={() => {
-              setSelected(msg);
-              setReply('');
-            }}
-            className={`border p-4 rounded mb-2 cursor-pointer ${
-              selected?.id === msg.id ? 'bg-blue-100' : ''
-            }`}
-          >
-            <div className="text-sm text-gray-500">
-              {msg.name} ({msg.from})
-            </div>
-            <div>{msg.text}</div>
+        {messages.length === 0 ? (
+          <p>No messages yet...</p>
+        ) : (
+          <div className="space-y-3">
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                onClick={() => {
+                  setSelected(msg);
+                  setReply('');
+                }}
+                className={`border rounded-lg p-4 cursor-pointer ${
+                  selected?.id === msg.id ? 'bg-blue-100' : 'bg-white'
+                }`}
+              >
+                <div className="text-sm text-gray-500">
+                  {msg.name} ({msg.from})
+                </div>
+                <div className="mt-2 text-lg">{msg.text}</div>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
 
       <div>
-        <h2 className="text-xl font-bold mb-4">Conversation</h2>
+        <h2 className="text-2xl font-bold mb-4">Conversation</h2>
 
         {selected ? (
-          <div className="border p-4 rounded space-y-4">
+          <div className="border rounded-lg p-4 space-y-4 bg-white">
             <div>
               <p className="text-gray-500">
                 {selected.name} ({selected.from})
               </p>
-              <p className="mt-2">{selected.text}</p>
+              <p className="mt-2 text-lg">{selected.text}</p>
             </div>
 
             <button
@@ -104,9 +144,17 @@ export default function InboxPage() {
             </button>
 
             {reply && (
-              <div className="border rounded p-3 bg-gray-50">
+              <div className="border rounded p-3 bg-gray-50 space-y-3">
                 <p className="text-sm text-gray-500 mb-2">AI Reply</p>
                 <p>{reply}</p>
+
+                <button
+                  onClick={sendWhatsAppReply}
+                  disabled={sending}
+                  className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50"
+                >
+                  {sending ? 'Sending...' : 'Send to WhatsApp'}
+                </button>
               </div>
             )}
           </div>
