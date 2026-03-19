@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { db } from '@/lib/firebase';
 import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 
@@ -9,11 +9,12 @@ type Message = {
   from: string;
   name: string;
   text: string;
+  direction?: 'inbound' | 'outbound';
 };
 
 export default function InboxPage() {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [selected, setSelected] = useState<Message | null>(null);
+  const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
   const [reply, setReply] = useState('');
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -32,8 +33,40 @@ export default function InboxPage() {
     return () => unsubscribe();
   }, []);
 
+  const conversations = useMemo(() => {
+    const map = new Map<string, Message>();
+
+    for (const msg of messages) {
+      if (!map.has(msg.from)) {
+        map.set(msg.from, msg);
+      }
+    }
+
+    return Array.from(map.values());
+  }, [messages]);
+
+  const selectedConversationMessages = useMemo(() => {
+    if (!selectedPhone) return [];
+    return messages
+      .filter((m) => m.from === selectedPhone)
+      .slice()
+      .reverse();
+  }, [messages, selectedPhone]);
+
+  const selectedContact = useMemo(() => {
+    if (!selectedPhone) return null;
+    return conversations.find((c) => c.from === selectedPhone) || null;
+  }, [selectedPhone, conversations]);
+
   async function generateReply() {
-    if (!selected) return;
+    if (!selectedContact) return;
+
+    const latestInbound =
+      [...selectedConversationMessages]
+        .reverse()
+        .find((m) => m.direction !== 'outbound') || selectedConversationMessages[selectedConversationMessages.length - 1];
+
+    if (!latestInbound) return;
 
     try {
       setLoading(true);
@@ -41,12 +74,10 @@ export default function InboxPage() {
 
       const res = await fetch('/api/generate-reply', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: selected.name,
-          message: selected.text,
+          name: selectedContact.name,
+          message: latestInbound.text,
         }),
       });
 
@@ -61,19 +92,18 @@ export default function InboxPage() {
   }
 
   async function sendWhatsAppReply() {
-    if (!selected || !reply) return;
+    if (!selectedContact || !reply) return;
 
     try {
       setSending(true);
 
       const res = await fetch('/api/send-whatsapp', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          to: selected.from,
+          to: selectedContact.from,
           message: reply,
+          name: selectedContact.name,
         }),
       });
 
@@ -85,6 +115,7 @@ export default function InboxPage() {
       }
 
       alert('✅ Sent to WhatsApp');
+      setReply('');
     } catch (error) {
       console.error(error);
       alert('❌ Failed to send');
@@ -98,19 +129,19 @@ export default function InboxPage() {
       <div>
         <h1 className="text-2xl font-bold mb-4">WhatsApp Inbox</h1>
 
-        {messages.length === 0 ? (
+        {conversations.length === 0 ? (
           <p>No messages yet...</p>
         ) : (
           <div className="space-y-3">
-            {messages.map((msg) => (
+            {conversations.map((msg) => (
               <div
-                key={msg.id}
+                key={msg.from}
                 onClick={() => {
-                  setSelected(msg);
+                  setSelectedPhone(msg.from);
                   setReply('');
                 }}
                 className={`border rounded-lg p-4 cursor-pointer ${
-                  selected?.id === msg.id ? 'bg-blue-100' : 'bg-white'
+                  selectedPhone === msg.from ? 'bg-blue-100' : 'bg-white'
                 }`}
               >
                 <div className="text-sm text-gray-500">
@@ -126,37 +157,54 @@ export default function InboxPage() {
       <div>
         <h2 className="text-2xl font-bold mb-4">Conversation</h2>
 
-        {selected ? (
-          <div className="border rounded-lg p-4 space-y-4 bg-white">
-            <div>
+        {selectedContact ? (
+          <div className="space-y-4">
+            <div className="border rounded-lg p-4 bg-white space-y-3 max-h-[420px] overflow-y-auto">
               <p className="text-gray-500">
-                {selected.name} ({selected.from})
+                {selectedContact.name} ({selectedContact.from})
               </p>
-              <p className="mt-2 text-lg">{selected.text}</p>
+
+              {selectedConversationMessages.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`p-3 rounded-lg max-w-[85%] ${
+                    msg.direction === 'outbound'
+                      ? 'ml-auto bg-green-100'
+                      : 'mr-auto bg-gray-100'
+                  }`}
+                >
+                  <div className="text-xs text-gray-500 mb-1">
+                    {msg.direction === 'outbound' ? 'You' : msg.name}
+                  </div>
+                  <div>{msg.text}</div>
+                </div>
+              ))}
             </div>
 
-            <button
-              onClick={generateReply}
-              disabled={loading}
-              className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
-            >
-              {loading ? 'Generating...' : 'Generate AI Reply'}
-            </button>
+            <div className="border rounded-lg p-4 bg-white space-y-4">
+              <button
+                onClick={generateReply}
+                disabled={loading}
+                className="px-4 py-2 rounded bg-black text-white disabled:opacity-50"
+              >
+                {loading ? 'Generating...' : 'Generate AI Reply'}
+              </button>
 
-            {reply && (
-              <div className="border rounded p-3 bg-gray-50 space-y-3">
-                <p className="text-sm text-gray-500 mb-2">AI Reply</p>
-                <p>{reply}</p>
+              {reply && (
+                <div className="border rounded p-3 bg-gray-50 space-y-3">
+                  <p className="text-sm text-gray-500 mb-2">AI Reply</p>
+                  <p>{reply}</p>
 
-                <button
-                  onClick={sendWhatsAppReply}
-                  disabled={sending}
-                  className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50"
-                >
-                  {sending ? 'Sending...' : 'Send to WhatsApp'}
-                </button>
-              </div>
-            )}
+                  <button
+                    onClick={sendWhatsAppReply}
+                    disabled={sending}
+                    className="px-4 py-2 bg-green-600 text-white rounded disabled:opacity-50"
+                  >
+                    {sending ? 'Sending...' : 'Send to WhatsApp'}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <p>Select a conversation</p>

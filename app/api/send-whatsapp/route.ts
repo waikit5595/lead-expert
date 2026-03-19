@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
+import { db } from '@/lib/firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 export async function POST(req: Request) {
   try {
-    const { to, message } = await req.json();
+    const { to, message, name } = await req.json();
 
     if (!process.env.WHATSAPP_PHONE_NUMBER_ID) {
       return NextResponse.json(
@@ -53,6 +55,14 @@ export async function POST(req: Request) {
         { status: res.status }
       );
     }
+
+    await addDoc(collection(db, 'messages'), {
+      from: to,
+      name: name || 'Unknown',
+      text: message,
+      direction: 'outbound',
+      createdAt: serverTimestamp(),
+    });
 
     return NextResponse.json({ success: true, data });
   } catch (error) {
