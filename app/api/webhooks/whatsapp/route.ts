@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { db } from "@/lib/firebase";
+import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -18,9 +20,6 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    console.log("🔥 FULL WEBHOOK BODY:", JSON.stringify(body, null, 2));
-
-    // 防止 undefined crash
     const entry = body.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
@@ -33,16 +32,20 @@ export async function POST(req: Request) {
       const text = message.text?.body || "No text";
       const name = contact?.profile?.name || "Unknown";
 
-      console.log("📩 Incoming Message:");
-      console.log("From:", from);
-      console.log("Name:", name);
-      console.log("Text:", text);
+      console.log("📩 Saving message:", text);
+
+      // 🔥 存进 Firestore
+      await addDoc(collection(db, "messages"), {
+        from,
+        name,
+        text,
+        createdAt: serverTimestamp(),
+      });
     }
 
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("❌ Webhook Error:", error);
-    return NextResponse.json({ error: "Webhook failed" }, { status: 200 }); 
-    // ⚠️ 一定要 return 200，不然 Meta 会一直 retry
+    return NextResponse.json({ error: "ok" }, { status: 200 });
   }
 }
