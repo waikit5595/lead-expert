@@ -25,7 +25,14 @@ type Contact = {
   name: string;
   type?: 'unknown' | 'lead' | 'customer' | 'personal';
   autoReplyEnabled?: boolean;
+  notes?: string;
+  interest?: string;
+  budget?: string;
+  area?: string;
 };
+
+type TypeFilter = 'all' | 'unknown' | 'lead' | 'customer' | 'personal';
+type AutoFilter = 'all' | 'on' | 'off';
 
 export default function InboxPage() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -35,6 +42,15 @@ export default function InboxPage() {
   const [loadingReply, setLoadingReply] = useState(false);
   const [sendingReply, setSendingReply] = useState(false);
   const [savingContact, setSavingContact] = useState(false);
+
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
+  const [autoFilter, setAutoFilter] = useState<AutoFilter>('all');
+
+  const [notes, setNotes] = useState('');
+  const [interest, setInterest] = useState('');
+  const [budget, setBudget] = useState('');
+  const [area, setArea] = useState('');
 
   useEffect(() => {
     const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'));
@@ -88,6 +104,44 @@ export default function InboxPage() {
     if (!selectedPhone) return null;
     return contacts.find((c) => String(c.phone) === String(selectedPhone)) || null;
   }, [selectedPhone, contacts]);
+
+  useEffect(() => {
+    setNotes(selectedContact?.notes || '');
+    setInterest(selectedContact?.interest || '');
+    setBudget(selectedContact?.budget || '');
+    setArea(selectedContact?.area || '');
+  }, [selectedContact?.id]);
+
+  const filteredConversations = useMemo(() => {
+    return conversations.filter((msg) => {
+      const contact = contacts.find((c) => String(c.phone) === String(msg.from));
+      const resolvedType = contact?.type || 'unknown';
+      const resolvedAuto = Boolean(contact?.autoReplyEnabled);
+
+      const keyword = search.trim().toLowerCase();
+      const matchesSearch =
+        !keyword ||
+        msg.name?.toLowerCase().includes(keyword) ||
+        msg.from?.toLowerCase().includes(keyword) ||
+        msg.text?.toLowerCase().includes(keyword) ||
+        contact?.notes?.toLowerCase().includes(keyword) ||
+        contact?.interest?.toLowerCase().includes(keyword) ||
+        contact?.budget?.toLowerCase().includes(keyword) ||
+        contact?.area?.toLowerCase().includes(keyword);
+
+      const matchesType =
+        typeFilter === 'all' ? true : resolvedType === typeFilter;
+
+      const matchesAuto =
+        autoFilter === 'all'
+          ? true
+          : autoFilter === 'on'
+          ? resolvedAuto
+          : !resolvedAuto;
+
+      return matchesSearch && matchesType && matchesAuto;
+    });
+  }, [conversations, contacts, search, typeFilter, autoFilter]);
 
   async function generateReply() {
     if (!selectedConversation) return;
@@ -225,6 +279,31 @@ export default function InboxPage() {
     }
   }
 
+  async function saveContactProfile() {
+    if (!selectedConversation) return;
+
+    try {
+      setSavingContact(true);
+
+      const contactId = await ensureContactRecord();
+      if (!contactId) return;
+
+      await updateDoc(doc(db, 'contacts', contactId), {
+        notes,
+        interest,
+        budget,
+        area,
+      });
+
+      alert('✅ Contact profile saved');
+    } catch (error) {
+      console.error(error);
+      alert('❌ Failed to save profile');
+    } finally {
+      setSavingContact(false);
+    }
+  }
+
   function typeBadge(type?: string) {
     if (type === 'lead') return 'bg-blue-100 text-blue-700';
     if (type === 'customer') return 'bg-green-100 text-green-700';
@@ -236,20 +315,55 @@ export default function InboxPage() {
     <div className="p-6 h-[calc(100vh-40px)]">
       <h1 className="text-2xl font-bold mb-6">WhatsApp Inbox</h1>
 
-      <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] gap-6 h-[calc(100%-56px)]">
+      <div className="grid grid-cols-1 md:grid-cols-[380px_1fr] gap-6 h-[calc(100%-56px)]">
+        {/* 左边：专业版会话列表 */}
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
-          <div className="px-4 py-3 border-b">
-            <h2 className="font-semibold">Conversations</h2>
-            <p className="text-sm text-gray-500">
-              {conversations.length} conversation{conversations.length === 1 ? '' : 's'}
-            </p>
+          <div className="px-4 py-3 border-b space-y-3">
+            <div>
+              <h2 className="font-semibold">Conversations</h2>
+              <p className="text-sm text-gray-500">
+                {filteredConversations.length} conversation
+                {filteredConversations.length === 1 ? '' : 's'}
+              </p>
+            </div>
+
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search name, phone, message, notes..."
+              className="w-full border rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-200"
+            />
+
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value as TypeFilter)}
+                className="border rounded-lg px-3 py-2 text-sm"
+              >
+                <option value="all">All Types</option>
+                <option value="lead">Leads</option>
+                <option value="customer">Customers</option>
+                <option value="personal">Personal</option>
+                <option value="unknown">Unknown</option>
+              </select>
+
+              <select
+                value={autoFilter}
+                onChange={(e) => setAutoFilter(e.target.value as AutoFilter)}
+                className="border rounded-lg px-3 py-2 text-sm"
+              >
+                <option value="all">All Auto Reply</option>
+                <option value="on">Auto Reply ON</option>
+                <option value="off">Auto Reply OFF</option>
+              </select>
+            </div>
           </div>
 
           <div className="overflow-y-auto flex-1 p-3 space-y-3">
-            {conversations.length === 0 ? (
-              <div className="text-sm text-gray-500">No conversations yet...</div>
+            {filteredConversations.length === 0 ? (
+              <div className="text-sm text-gray-500">No matching conversations.</div>
             ) : (
-              conversations.map((msg) => {
+              filteredConversations.map((msg) => {
                 const c = contacts.find((x) => String(x.phone) === String(msg.from));
 
                 return (
@@ -274,7 +388,14 @@ export default function InboxPage() {
                         {c?.type || 'unknown'}
                       </span>
                     </div>
+
                     <div className="mt-2 font-medium line-clamp-2">{msg.text}</div>
+
+                    {(c?.interest || c?.area) && (
+                      <div className="mt-2 text-xs text-gray-500">
+                        {[c?.interest, c?.area].filter(Boolean).join(' • ')}
+                      </div>
+                    )}
                   </button>
                 );
               })
@@ -282,10 +403,12 @@ export default function InboxPage() {
           </div>
         </div>
 
+        {/* 右边 */}
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
           {selectedConversation ? (
             <>
-              <div className="px-5 py-4 border-b space-y-3">
+              {/* 顶部资料卡 */}
+              <div className="px-5 py-4 border-b space-y-4">
                 <div>
                   <h2 className="font-semibold text-lg">{selectedConversation.name}</h2>
                   <p className="text-sm text-gray-500">{selectedConversation.from}</p>
@@ -337,8 +460,62 @@ export default function InboxPage() {
                     {savingContact ? 'Saving...' : 'Toggle Auto Reply'}
                   </button>
                 </div>
+
+                {/* 联系人资料卡 */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 border rounded-xl p-4 bg-gray-50">
+                  <div>
+                    <label className="block text-sm text-gray-500 mb-1">Interest / Project</label>
+                    <input
+                      value={interest}
+                      onChange={(e) => setInterest(e.target.value)}
+                      placeholder="e.g. M Aurora"
+                      className="w-full border rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm text-gray-500 mb-1">Area</label>
+                    <input
+                      value={area}
+                      onChange={(e) => setArea(e.target.value)}
+                      placeholder="e.g. Klang Valley"
+                      className="w-full border rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm text-gray-500 mb-1">Budget</label>
+                    <input
+                      value={budget}
+                      onChange={(e) => setBudget(e.target.value)}
+                      placeholder="e.g. RM500k - RM700k"
+                      className="w-full border rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-sm text-gray-500 mb-1">Notes</label>
+                    <textarea
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="Anything important about this contact..."
+                      className="w-full min-h-[90px] border rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <button
+                      onClick={saveContactProfile}
+                      disabled={savingContact}
+                      className="px-4 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50"
+                    >
+                      {savingContact ? 'Saving...' : 'Save Contact Profile'}
+                    </button>
+                  </div>
+                </div>
               </div>
 
+              {/* 中间聊天 */}
               <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-gray-50">
                 {selectedConversationMessages.map((msg) => (
                   <div
@@ -357,6 +534,7 @@ export default function InboxPage() {
                 ))}
               </div>
 
+              {/* 底部回复 */}
               <div className="border-t p-5 space-y-4">
                 <div className="flex gap-3 flex-wrap">
                   <button

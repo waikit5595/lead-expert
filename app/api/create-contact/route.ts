@@ -7,6 +7,8 @@ import {
   query,
   where,
   getDocs,
+  updateDoc,
+  doc,
 } from 'firebase/firestore';
 
 export async function POST(req: Request) {
@@ -20,14 +22,20 @@ export async function POST(req: Request) {
       );
     }
 
-    // 先查有没有同号码联系人，避免重复
     const q = query(collection(db, 'contacts'), where('phone', '==', phone));
     const snap = await getDocs(q);
 
     if (!snap.empty) {
+      const existing = snap.docs[0];
+
+      await updateDoc(doc(db, 'contacts', existing.id), {
+        name: name || existing.data().name || 'Unknown',
+        updatedAt: serverTimestamp(),
+      });
+
       return NextResponse.json({
         success: true,
-        id: snap.docs[0].id,
+        id: existing.id,
       });
     }
 
@@ -36,6 +44,10 @@ export async function POST(req: Request) {
       name: name || 'Unknown',
       type: 'unknown',
       autoReplyEnabled: false,
+      notes: '',
+      interest: '',
+      budget: '',
+      area: '',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
