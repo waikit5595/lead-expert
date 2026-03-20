@@ -206,6 +206,11 @@ export default function DashboardPage() {
           description="See who needs a follow-up and generate WhatsApp follow-up drafts quickly."
           href="/follow-up"
         />
+        <QuickLinkCard
+          title="Billing & Plans"
+          description="Upgrade your plan, manage subscription, and unlock more features."
+          href="/billing"
+        />
       </div>
 
       {/* Main Panels */}

@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { db } from '@/lib/firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase';
 import { plans, type PlanKey } from '@/lib/plans';
 
 type SubscriptionDoc = {
@@ -12,30 +13,29 @@ type SubscriptionDoc = {
 };
 
 export default function BillingPage() {
-  const [userId, setUserId] = useState<string>('');
-  const [email, setEmail] = useState<string>('');
+  const [user, setUser] = useState<User | null>(null);
   const [sub, setSub] = useState<SubscriptionDoc | null>(null);
   const [loadingPlan, setLoadingPlan] = useState<'starter' | 'pro' | 'team' | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
-    const rawUser = localStorage.getItem('closer_user');
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+      setAuthLoading(false);
+    });
 
-    if (rawUser) {
-      const parsed = JSON.parse(rawUser);
-      setUserId(parsed.uid || '');
-      setEmail(parsed.email || '');
-    }
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!user?.uid) return;
 
-    const unsubscribe = onSnapshot(doc(db, 'subscriptions', userId), (snap) => {
+    const unsubscribe = onSnapshot(doc(db, 'subscriptions', user.uid), (snap) => {
       if (snap.exists()) {
         setSub(snap.data() as SubscriptionDoc);
       } else {
         setSub({
-          userId,
+          userId: user.uid,
           plan: 'free',
           status: 'active',
         });
@@ -43,10 +43,10 @@ export default function BillingPage() {
     });
 
     return () => unsubscribe();
-  }, [userId]);
+  }, [user?.uid]);
 
   async function startCheckout(plan: 'starter' | 'pro' | 'team') {
-    if (!userId || !email) {
+    if (!user?.uid || !user?.email) {
       alert('Please log in first.');
       return;
     }
@@ -57,7 +57,11 @@ export default function BillingPage() {
       const res = await fetch('/api/stripe/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, email, plan }),
+        body: JSON.stringify({
+          userId: user.uid,
+          email: user.email,
+          plan,
+        }),
       });
 
       const data = await res.json();
@@ -76,6 +80,15 @@ export default function BillingPage() {
     }
   }
 
+  if (authLoading) {
+    return (
+      <div className="p-6">
+        <h1 className="text-2xl font-bold mb-2">Billing</h1>
+        <p className="text-sm text-gray-500">Loading account...</p>
+      </div>
+    );
+  }
+
   const currentPlan = sub?.plan || 'free';
   const currentStatus = sub?.status || 'active';
 
@@ -88,49 +101,63 @@ export default function BillingPage() {
         </p>
       </div>
 
-      <div className="border rounded-2xl bg-white p-5">
-        <div className="text-sm text-gray-500">Current Plan</div>
-        <div className="text-2xl font-bold mt-2">{plans[currentPlan].name}</div>
-        <div className="text-sm text-gray-500 mt-1">Status: {currentStatus}</div>
-      </div>
+      {!user ? (
+        <div className="border rounded-2xl bg-white p-5">
+          <div className="text-lg font-semibold">You are not logged in</div>
+          <div className="text-sm text-gray-500 mt-2">
+            Please sign in first before starting checkout.
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="border rounded-2xl bg-white p-5">
+            <div className="text-sm text-gray-500">Current Plan</div>
+            <div className="text-2xl font-bold mt-2">{plans[currentPlan].name}</div>
+            <div className="text-sm text-gray-500 mt-1">Status: {currentStatus}</div>
+            <div className="text-sm text-gray-500 mt-2">
+              Signed in as: {user.email}
+            </div>
+          </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <PlanCard
-          title="Starter"
-          price="$29/mo"
-          features={[
-            `${plans.starter.contactLimit} contacts`,
-            `${plans.starter.aiReplyLimit} AI replies / month`,
-            `${plans.starter.autoReplyLimit} auto replies / month`,
-          ]}
-          loading={loadingPlan === 'starter'}
-          onClick={() => startCheckout('starter')}
-        />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <PlanCard
+              title="Starter"
+              price="$29/mo"
+              features={[
+                `${plans.starter.contactLimit} contacts`,
+                `${plans.starter.aiReplyLimit} AI replies / month`,
+                `${plans.starter.autoReplyLimit} auto replies / month`,
+              ]}
+              loading={loadingPlan === 'starter'}
+              onClick={() => startCheckout('starter')}
+            />
 
-        <PlanCard
-          title="Pro"
-          price="$79/mo"
-          features={[
-            `${plans.pro.contactLimit} contacts`,
-            `${plans.pro.aiReplyLimit} AI replies / month`,
-            `${plans.pro.autoReplyLimit} auto replies / month`,
-          ]}
-          loading={loadingPlan === 'pro'}
-          onClick={() => startCheckout('pro')}
-        />
+            <PlanCard
+              title="Pro"
+              price="$79/mo"
+              features={[
+                `${plans.pro.contactLimit} contacts`,
+                `${plans.pro.aiReplyLimit} AI replies / month`,
+                `${plans.pro.autoReplyLimit} auto replies / month`,
+              ]}
+              loading={loadingPlan === 'pro'}
+              onClick={() => startCheckout('pro')}
+            />
 
-        <PlanCard
-          title="Team"
-          price="$199/mo"
-          features={[
-            `${plans.team.contactLimit} contacts`,
-            `${plans.team.aiReplyLimit} AI replies / month`,
-            `${plans.team.autoReplyLimit} auto replies / month`,
-          ]}
-          loading={loadingPlan === 'team'}
-          onClick={() => startCheckout('team')}
-        />
-      </div>
+            <PlanCard
+              title="Team"
+              price="$199/mo"
+              features={[
+                `${plans.team.contactLimit} contacts`,
+                `${plans.team.aiReplyLimit} AI replies / month`,
+                `${plans.team.autoReplyLimit} auto replies / month`,
+              ]}
+              loading={loadingPlan === 'team'}
+              onClick={() => startCheckout('team')}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }
