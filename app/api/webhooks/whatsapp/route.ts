@@ -11,6 +11,11 @@ import {
   doc,
 } from 'firebase/firestore';
 import { shouldAutoReply, type ContactType } from '@/lib/contact-rules';
+import {
+  getWorkspaceBillingSummary,
+  getWorkspaceContactCount,
+  incrementWorkspaceUsage,
+} from '@/lib/billing';
 
 function getRuleBasedReply(text: string): string | null {
   const lower = text.toLowerCase().trim();
@@ -137,6 +142,19 @@ async function getOrCreateContact(phone: string, name: string): Promise<ContactR
   const snap = await getDocs(q);
 
   if (snap.empty) {
+    const billing = await getWorkspaceBillingSummary();
+    const contactCount = await getWorkspaceContactCount();
+
+    if (contactCount >= billing.limits.contactLimit) {
+      return {
+        id: '',
+        phone,
+        name,
+        type: 'unknown',
+        autoReplyEnabled: false,
+      };
+    }
+
     const docRef = await addDoc(contactsRef, {
       phone,
       name,
@@ -204,7 +222,6 @@ export async function POST(req: Request) {
     const text: string = message.text?.body || 'No text';
     const name: string = contact?.profile?.name || 'Unknown';
 
-    // 存 inbound
     await addDoc(collection(db, 'messages'), {
       from,
       name,
@@ -213,15 +230,23 @@ export async function POST(req: Request) {
       createdAt: serverTimestamp(),
     });
 
-    // 第一次来先建联系人，默认 unknown
     const contactRecord = await getOrCreateContact(from, name);
 
-    // 只有 lead / customer 且 autoReplyEnabled=true 才自动回复
     if (!shouldAutoReply(contactRecord.type) || !contactRecord.autoReplyEnabled) {
       return NextResponse.json({
         success: true,
         skipped: true,
         reason: `No auto-reply for contact type: ${contactRecord.type}`,
+      });
+    }
+
+    const billing = await getWorkspaceBillingSummary();
+
+    if (billing.usage.autoRepliesUsed >= billing.limits.autoReplyLimit) {
+      return NextResponse.json({
+        success: true,
+        skipped: true,
+        reason: `Auto reply limit reached for ${billing.plan} plan`,
       });
     }
 
@@ -237,7 +262,6 @@ export async function POST(req: Request) {
 
     await sendWhatsAppMessage(from, reply);
 
-    // 存 outbound
     await addDoc(collection(db, 'messages'), {
       from,
       name,
@@ -245,6 +269,8 @@ export async function POST(req: Request) {
       direction: 'outbound',
       createdAt: serverTimestamp(),
     });
+
+    await incrementWorkspaceUsage('autoRepliesUsed', 1);
 
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -10,6 +10,7 @@ import {
   updateDoc,
   doc,
 } from 'firebase/firestore';
+import { getWorkspaceBillingSummary } from '@/lib/billing';
 
 export async function POST(req: Request) {
   try {
@@ -37,6 +38,19 @@ export async function POST(req: Request) {
         success: true,
         id: existing.id,
       });
+    }
+
+    const billing = await getWorkspaceBillingSummary();
+
+    if (billing.usage.contactCount >= billing.limits.contactLimit) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Contact limit reached for ${billing.plan} plan. Upgrade to continue.`,
+          upgradeRequired: true,
+        },
+        { status: 403 }
+      );
     }
 
     const docRef = await addDoc(collection(db, 'contacts'), {

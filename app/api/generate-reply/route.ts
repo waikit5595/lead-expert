@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { incrementWorkspaceUsage, getWorkspaceBillingSummary } from '@/lib/billing';
 
 export async function POST(req: Request) {
   try {
@@ -8,6 +9,18 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { reply: 'Missing customer message.' },
         { status: 400 }
+      );
+    }
+
+    const billing = await getWorkspaceBillingSummary();
+
+    if (billing.usage.aiRepliesUsed >= billing.limits.aiReplyLimit) {
+      return NextResponse.json(
+        {
+          reply: `You reached your monthly AI reply limit for the ${billing.plan} plan. Please upgrade to continue.`,
+          upgradeRequired: true,
+        },
+        { status: 403 }
       );
     }
 
@@ -81,6 +94,8 @@ Generate one WhatsApp reply only.
     const reply =
       data?.choices?.[0]?.message?.content?.trim() ||
       '你好呀 😊 请问有什么我可以帮你的吗？';
+
+    await incrementWorkspaceUsage('aiRepliesUsed', 1);
 
     return NextResponse.json({ reply });
   } catch (error) {
