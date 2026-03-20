@@ -32,6 +32,22 @@ type Contact = {
   updatedAt?: any;
 };
 
+type BillingSummary = {
+  ownerId: string;
+  plan: 'free' | 'starter' | 'pro' | 'team';
+  status: string;
+  limits: {
+    contactLimit: number;
+    aiReplyLimit: number;
+    autoReplyLimit: number;
+  };
+  usage: {
+    contactCount: number;
+    aiRepliesUsed: number;
+    autoRepliesUsed: number;
+  };
+};
+
 function toMillis(value: any): number {
   if (!value) return 0;
 
@@ -55,6 +71,7 @@ function daysBetween(fromMs: number, toMs: number) {
 export default function DashboardPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [billing, setBilling] = useState<BillingSummary | null>(null);
 
   useEffect(() => {
     const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'));
@@ -80,6 +97,29 @@ export default function DashboardPage() {
     });
 
     return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadBilling() {
+      try {
+        const res = await fetch('/api/billing/summary');
+        const data = await res.json();
+
+        if (mounted && data.success) {
+          setBilling(data.summary);
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    loadBilling();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const stats = useMemo(() => {
@@ -152,12 +192,16 @@ export default function DashboardPage() {
   }, [messages]);
 
   const hotLeads = useMemo(() => {
-    return contacts.filter(
-      (c) =>
-        (c.type === 'lead' || c.type === 'customer') &&
-        (c.interest || c.budget || c.area)
-    ).slice(0, 6);
+    return contacts
+      .filter(
+        (c) =>
+          (c.type === 'lead' || c.type === 'customer') &&
+          (c.interest || c.budget || c.area)
+      )
+      .slice(0, 6);
   }, [contacts]);
+
+  const planName = billing?.plan?.toUpperCase() || 'FREE';
 
   return (
     <div className="p-6 space-y-6">
@@ -168,7 +212,29 @@ export default function DashboardPage() {
         </p>
       </div>
 
-      {/* Top Stats */}
+      {billing && (
+        <div className="border rounded-2xl bg-white p-5">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <div className="text-sm text-gray-500">Current Plan</div>
+              <div className="text-2xl font-bold mt-1">{planName}</div>
+              <div className="text-sm text-gray-500 mt-1">
+                Contacts: {billing.usage.contactCount}/{billing.limits.contactLimit} • AI Replies:{' '}
+                {billing.usage.aiRepliesUsed}/{billing.limits.aiReplyLimit} • Auto Replies:{' '}
+                {billing.usage.autoRepliesUsed}/{billing.limits.autoReplyLimit}
+              </div>
+            </div>
+
+            <Link
+              href="/billing"
+              className="px-4 py-2 rounded-lg bg-black text-white text-center"
+            >
+              Upgrade Plan
+            </Link>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard title="Total Contacts" value={stats.totalContacts} />
         <StatCard title="Leads" value={stats.leads} />
@@ -176,7 +242,6 @@ export default function DashboardPage() {
         <StatCard title="Need Follow Up" value={stats.needFollowUp} />
       </div>
 
-      {/* Secondary Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard title="Unknown" value={stats.unknown} />
         <StatCard title="Personal" value={stats.personal} />
@@ -184,7 +249,6 @@ export default function DashboardPage() {
         <StatCard title="Tracked Contacts" value={stats.totalContacts - stats.unknown} />
       </div>
 
-      {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <QuickLinkCard
           title="Open Inbox"
@@ -206,14 +270,8 @@ export default function DashboardPage() {
           description="See who needs a follow-up and generate WhatsApp follow-up drafts quickly."
           href="/follow-up"
         />
-        <QuickLinkCard
-          title="Billing & Plans"
-          description="Upgrade your plan, manage subscription, and unlock more features."
-          href="/billing"
-        />
       </div>
 
-      {/* Main Panels */}
       <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_1fr] gap-6">
         <div className="border rounded-2xl bg-white overflow-hidden">
           <div className="px-5 py-4 border-b">
@@ -285,10 +343,26 @@ export default function DashboardPage() {
                   </div>
 
                   <div className="grid grid-cols-1 gap-2 text-sm text-gray-700">
-                    {lead.interest ? <div><span className="text-gray-500">Interest:</span> {lead.interest}</div> : null}
-                    {lead.area ? <div><span className="text-gray-500">Area:</span> {lead.area}</div> : null}
-                    {lead.budget ? <div><span className="text-gray-500">Budget:</span> {lead.budget}</div> : null}
-                    {lead.notes ? <div><span className="text-gray-500">Notes:</span> {lead.notes}</div> : null}
+                    {lead.interest ? (
+                      <div>
+                        <span className="text-gray-500">Interest:</span> {lead.interest}
+                      </div>
+                    ) : null}
+                    {lead.area ? (
+                      <div>
+                        <span className="text-gray-500">Area:</span> {lead.area}
+                      </div>
+                    ) : null}
+                    {lead.budget ? (
+                      <div>
+                        <span className="text-gray-500">Budget:</span> {lead.budget}
+                      </div>
+                    ) : null}
+                    {lead.notes ? (
+                      <div>
+                        <span className="text-gray-500">Notes:</span> {lead.notes}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ))

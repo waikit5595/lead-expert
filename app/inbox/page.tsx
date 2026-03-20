@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { db } from '@/lib/firebase';
 import {
   collection,
@@ -35,6 +36,8 @@ type TypeFilter = 'all' | 'unknown' | 'lead' | 'customer' | 'personal';
 type AutoFilter = 'all' | 'on' | 'off';
 
 export default function InboxPage() {
+  const router = useRouter();
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
@@ -168,6 +171,13 @@ export default function InboxPage() {
       });
 
       const data = await res.json();
+
+      if (res.status === 403 && data.upgradeRequired) {
+        alert(data.reply || 'You reached your limit. Upgrade to continue.');
+        router.push('/billing');
+        return;
+      }
+
       setReply(data.reply || 'No reply generated');
     } catch (error) {
       console.error(error);
@@ -226,7 +236,13 @@ export default function InboxPage() {
     const data = await res.json();
 
     if (!data.success || !data.id) {
-      throw new Error('Failed to create contact');
+      if (data.upgradeRequired) {
+        alert(data.error || 'You reached your contact limit. Upgrade to continue.');
+        router.push('/billing');
+        return null;
+      }
+
+      throw new Error(data.error || 'Failed to create contact');
     }
 
     return data.id as string;
@@ -316,7 +332,6 @@ export default function InboxPage() {
       <h1 className="text-2xl font-bold mb-6">WhatsApp Inbox</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-[380px_1fr] gap-6 h-[calc(100%-56px)]">
-        {/* 左边：专业版会话列表 */}
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
           <div className="px-4 py-3 border-b space-y-3">
             <div>
@@ -403,11 +418,9 @@ export default function InboxPage() {
           </div>
         </div>
 
-        {/* 右边 */}
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
           {selectedConversation ? (
             <>
-              {/* 顶部资料卡 */}
               <div className="px-5 py-4 border-b space-y-4">
                 <div>
                   <h2 className="font-semibold text-lg">{selectedConversation.name}</h2>
@@ -461,7 +474,6 @@ export default function InboxPage() {
                   </button>
                 </div>
 
-                {/* 联系人资料卡 */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 border rounded-xl p-4 bg-gray-50">
                   <div>
                     <label className="block text-sm text-gray-500 mb-1">Interest / Project</label>
@@ -515,7 +527,6 @@ export default function InboxPage() {
                 </div>
               </div>
 
-              {/* 中间聊天 */}
               <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-gray-50">
                 {selectedConversationMessages.map((msg) => (
                   <div
@@ -534,7 +545,6 @@ export default function InboxPage() {
                 ))}
               </div>
 
-              {/* 底部回复 */}
               <div className="border-t p-5 space-y-4">
                 <div className="flex gap-3 flex-wrap">
                   <button
@@ -543,6 +553,13 @@ export default function InboxPage() {
                     className="px-4 py-2 rounded-lg bg-black text-white disabled:opacity-50"
                   >
                     {loadingReply ? 'Generating...' : 'Generate AI Reply'}
+                  </button>
+
+                  <button
+                    onClick={() => router.push('/billing')}
+                    className="px-4 py-2 rounded-lg border"
+                  >
+                    Upgrade
                   </button>
                 </div>
 

@@ -12,11 +12,29 @@ type SubscriptionDoc = {
   status?: string;
 };
 
+type BillingSummary = {
+  ownerId: string;
+  plan: PlanKey;
+  status: string;
+  limits: {
+    contactLimit: number;
+    aiReplyLimit: number;
+    autoReplyLimit: number;
+  };
+  usage: {
+    contactCount: number;
+    aiRepliesUsed: number;
+    autoRepliesUsed: number;
+  };
+};
+
 export default function BillingPage() {
   const [user, setUser] = useState<User | null>(null);
   const [sub, setSub] = useState<SubscriptionDoc | null>(null);
+  const [summary, setSummary] = useState<BillingSummary | null>(null);
   const [loadingPlan, setLoadingPlan] = useState<'starter' | 'pro' | 'team' | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [summaryLoading, setSummaryLoading] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
@@ -44,6 +62,32 @@ export default function BillingPage() {
 
     return () => unsubscribe();
   }, [user?.uid]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadSummary() {
+      try {
+        setSummaryLoading(true);
+        const res = await fetch('/api/billing/summary');
+        const data = await res.json();
+
+        if (mounted && data.success) {
+          setSummary(data.summary);
+        }
+      } catch (error) {
+        console.error(error);
+      } finally {
+        if (mounted) setSummaryLoading(false);
+      }
+    }
+
+    loadSummary();
+
+    return () => {
+      mounted = false;
+    };
+  }, [sub?.plan, sub?.status]);
 
   async function startCheckout(plan: 'starter' | 'pro' | 'team') {
     if (!user?.uid || !user?.email) {
@@ -92,6 +136,16 @@ export default function BillingPage() {
   const currentPlan = sub?.plan || 'free';
   const currentStatus = sub?.status || 'active';
 
+  const usage = summary?.usage;
+  const limits = summary?.limits;
+
+  const contactRemaining =
+    summary && limits ? Math.max(limits.contactLimit - usage!.contactCount, 0) : 0;
+  const aiRemaining =
+    summary && limits ? Math.max(limits.aiReplyLimit - usage!.aiRepliesUsed, 0) : 0;
+  const autoRemaining =
+    summary && limits ? Math.max(limits.autoReplyLimit - usage!.autoRepliesUsed, 0) : 0;
+
   return (
     <div className="p-6 space-y-6">
       <div>
@@ -110,14 +164,51 @@ export default function BillingPage() {
         </div>
       ) : (
         <>
-          <div className="border rounded-2xl bg-white p-5">
+          <div className="border rounded-2xl bg-white p-5 space-y-3">
             <div className="text-sm text-gray-500">Current Plan</div>
-            <div className="text-2xl font-bold mt-2">{plans[currentPlan].name}</div>
-            <div className="text-sm text-gray-500 mt-1">Status: {currentStatus}</div>
-            <div className="text-sm text-gray-500 mt-2">
-              Signed in as: {user.email}
-            </div>
+            <div className="text-2xl font-bold">{plans[currentPlan].name}</div>
+            <div className="text-sm text-gray-500">Status: {currentStatus}</div>
+            <div className="text-sm text-gray-500">Signed in as: {user.email}</div>
           </div>
+
+          <div className="border rounded-2xl bg-white p-5">
+            <div className="font-semibold mb-4">Current Usage</div>
+
+            {summaryLoading || !summary ? (
+              <div className="text-sm text-gray-500">Loading usage...</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <UsageCard
+                  title="Contacts"
+                  used={usage!.contactCount}
+                  limit={limits!.contactLimit}
+                  remaining={contactRemaining}
+                />
+                <UsageCard
+                  title="AI Replies"
+                  used={usage!.aiRepliesUsed}
+                  limit={limits!.aiReplyLimit}
+                  remaining={aiRemaining}
+                />
+                <UsageCard
+                  title="Auto Replies"
+                  used={usage!.autoRepliesUsed}
+                  limit={limits!.autoReplyLimit}
+                  remaining={autoRemaining}
+                />
+              </div>
+            )}
+          </div>
+
+          {currentPlan === 'free' && (
+            <div className="border rounded-2xl bg-yellow-50 border-yellow-200 p-5">
+              <div className="font-semibold text-yellow-800">You are on the Free plan</div>
+              <div className="text-sm text-yellow-700 mt-2">
+                Free accounts are limited in contacts, AI replies, and auto replies.
+                Upgrade to unlock more capacity and automation.
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <PlanCard
@@ -158,6 +249,43 @@ export default function BillingPage() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+function UsageCard({
+  title,
+  used,
+  limit,
+  remaining,
+}: {
+  title: string;
+  used: number;
+  limit: number;
+  remaining: number;
+}) {
+  const percentage = limit > 0 ? Math.min((used / limit) * 100, 100) : 0;
+
+  return (
+    <div className="border rounded-xl p-4 bg-gray-50">
+      <div className="text-sm text-gray-500">{title}</div>
+      <div className="text-2xl font-bold mt-2">
+        {used} / {limit}
+      </div>
+      <div className="text-sm text-gray-500 mt-1">{remaining} remaining</div>
+
+      <div className="mt-3 h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div
+          className={`h-full ${
+            percentage >= 90
+              ? 'bg-red-500'
+              : percentage >= 70
+              ? 'bg-yellow-500'
+              : 'bg-green-500'
+          }`}
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
     </div>
   );
 }
