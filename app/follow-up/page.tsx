@@ -8,6 +8,10 @@ import {
   orderBy,
   query,
 } from 'firebase/firestore';
+import {
+  defaultFollowUpSettings,
+  type FollowUpSettings,
+} from '@/lib/followup-rules';
 
 type Message = {
   id: string;
@@ -26,13 +30,22 @@ type Contact = {
   autoReplyEnabled?: boolean;
 };
 
+type Template = {
+  id: string;
+  title: string;
+  category: string;
+  content: string;
+};
+
 type FollowUpItem = {
   phone: string;
   name: string;
   type: string;
+  priority: 'normal' | 'high';
   daysSinceInbound: number;
   lastInboundText: string;
   latestInboundAt: number;
+  recommendedTemplate?: string;
 };
 
 function toMillis(value: any): number {
@@ -58,11 +71,14 @@ function daysBetween(fromMs: number, toMs: number) {
 export default function FollowUpPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [settings, setSettings] = useState<FollowUpSettings>(defaultFollowUpSettings);
+
   const [selected, setSelected] = useState<FollowUpItem | null>(null);
   const [draft, setDraft] = useState('');
   const [loadingDraft, setLoadingDraft] = useState(false);
   const [sending, setSending] = useState(false);
-  const [minDays, setMinDays] = useState(2);
+  const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {
     const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'));
@@ -89,6 +105,47 @@ export default function FollowUpPage() {
 
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadTemplates() {
+      try {
+        const res = await fetch('/api/templates');
+        const data = await res.json();
+
+        if (mounted && data.success) {
+          setTemplates(data.templates || []);
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/followup-settings');
+        const data = await res.json();
+
+        if (mounted && data.success) {
+          setSettings(data.settings);
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    loadTemplates();
+    loadSettings();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const recommendedFollowupTemplate = useMemo(() => {
+    return templates.find((t) => t.category === 'follow-up')?.content || '';
+  }, [templates]);
 
   const followUps = useMemo(() => {
     const now = Date.now();
@@ -127,26 +184,71 @@ export default function FollowUpPage() {
 
       const latestInboundAt = toMillis(latestInbound.createdAt);
       const latestOutboundAt = latestOutbound ? toMillis(latestOutbound.createdAt) : 0;
+
       const daysSinceInbound = daysBetween(latestInboundAt, now);
 
-      if (latestOutboundAt > latestInboundAt && daysBetween(latestOutboundAt, now) < minDays) {
+      if (
+        latestOutboundAt > latestInboundAt &&
+        daysBetween(latestOutboundAt, now) < settings.firstReminderDays
+      ) {
         continue;
       }
 
-      if (daysSinceInbound < minDays) continue;
+      if (daysSinceInbound < settings.firstReminderDays) continue;
 
       rows.push({
         phone: contact.phone,
         name: contact.name || latestInbound.name || 'Unknown',
         type: contact.type || 'lead',
+        priority:
+          daysSinceInbound >= settings.highPriorityDays ? 'high' : 'normal',
         daysSinceInbound,
         lastInboundText: latestInbound.text,
         latestInboundAt,
+        recommendedTemplate: recommendedFollowupTemplate,
       });
     }
 
-    return rows.sort((a, b) => b.daysSinceInbound - a.daysSinceInbound);
-  }, [messages, contacts, minDays]);
+    return rows.sort((a, b) => {
+      if (a.priority === 'high' && b.priority !== 'high') return -1;
+      if (a.priority !== 'high' && b.priority === 'high') return 1;
+      return b.daysSinceInbound - a.daysSinceInbound;
+    });
+  }, [messages, contacts, settings, recommendedFollowupTemplate]);
+
+  const stats = useMemo(() => {
+    return {
+      total: followUps.length,
+      high: followUps.filter((x) => x.priority === 'high').length,
+      normal: followUps.filter((x) => x.priority === 'normal').length,
+    };
+  }, [followUps]);
+
+  async function saveSettings() {
+    try {
+      setSavingSettings(true);
+
+      const res = await fetch('/api/followup-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        alert(data.error || 'Failed to save settings');
+        return;
+      }
+
+      alert('✅ Follow-up settings saved');
+    } catch (error) {
+      console.error(error);
+      alert('❌ Failed to save settings');
+    } finally {
+      setSavingSettings(false);
+    }
+  }
 
   async function generateFollowUp(item: FollowUpItem) {
     try {
@@ -154,14 +256,18 @@ export default function FollowUpPage() {
       setLoadingDraft(true);
       setDraft('');
 
-      const res = await fetch('/api/generate-followup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(item),
-      });
+      if (settings.autoDraftEnabled && item.recommendedTemplate) {
+        const res = await fetch('/api/generate-followup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(item),
+        });
 
-      const data = await res.json();
-      setDraft(data.reply || 'No follow-up generated');
+        const data = await res.json();
+        setDraft(data.reply || 'No follow-up generated');
+      } else {
+        setDraft(item.recommendedTemplate || '');
+      }
     } catch (error) {
       console.error(error);
       setDraft('Failed to generate follow-up');
@@ -208,26 +314,98 @@ export default function FollowUpPage() {
     return 'bg-blue-100 text-blue-700';
   }
 
-  return (
-    <div className="p-6 h-[calc(100vh-40px)]">
-      <h1 className="text-2xl font-bold mb-6">Follow Up</h1>
+  function priorityBadge(priority: 'normal' | 'high') {
+    return priority === 'high'
+      ? 'bg-red-100 text-red-700'
+      : 'bg-yellow-100 text-yellow-700';
+  }
 
-      <div className="mb-4 flex items-center gap-3">
-        <label className="text-sm text-gray-600">Show contacts with no reply for at least</label>
-        <select
-          value={minDays}
-          onChange={(e) => setMinDays(Number(e.target.value))}
-          className="border rounded-lg px-3 py-2"
-        >
-          <option value={1}>1 day</option>
-          <option value={2}>2 days</option>
-          <option value={3}>3 days</option>
-          <option value={5}>5 days</option>
-          <option value={7}>7 days</option>
-        </select>
+  return (
+    <div className="p-6 h-[calc(100vh-40px)] space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold">Follow Up</h1>
+        <p className="text-sm text-gray-500 mt-1">
+          Automatically identify leads that need follow-up and generate smart WhatsApp drafts.
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-[420px_1fr] gap-6 h-[calc(100%-92px)]">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <StatCard title="Need Follow Up" value={stats.total} />
+        <StatCard title="High Priority" value={stats.high} />
+        <StatCard title="Normal Priority" value={stats.normal} />
+      </div>
+
+      {/* Rules */}
+      <div className="border rounded-2xl bg-white p-5 space-y-4">
+        <div className="font-semibold">Follow-up Rules</div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm text-gray-500 mb-1">
+              First Reminder (days)
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={settings.firstReminderDays}
+              onChange={(e) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  firstReminderDays: Number(e.target.value || 1),
+                }))
+              }
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-500 mb-1">
+              High Priority (days)
+            </label>
+            <input
+              type="number"
+              min={1}
+              value={settings.highPriorityDays}
+              onChange={(e) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  highPriorityDays: Number(e.target.value || 1),
+                }))
+              }
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-500 mb-1">
+              Auto Draft Generation
+            </label>
+            <select
+              value={settings.autoDraftEnabled ? 'on' : 'off'}
+              onChange={(e) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  autoDraftEnabled: e.target.value === 'on',
+                }))
+              }
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="on">ON</option>
+              <option value="off">OFF</option>
+            </select>
+          </div>
+        </div>
+
+        <button
+          onClick={saveSettings}
+          disabled={savingSettings}
+          className="px-4 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50"
+        >
+          {savingSettings ? 'Saving...' : 'Save Follow-up Settings'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-[420px_1fr] gap-6 h-[calc(100%-290px)]">
         <div className="border rounded-2xl bg-white overflow-hidden flex flex-col">
           <div className="px-4 py-3 border-b">
             <h2 className="font-semibold">Need Follow Up</h2>
@@ -262,10 +440,17 @@ export default function FollowUpPage() {
                       {item.type}
                     </span>
                   </div>
+
                   <div className="text-sm text-gray-500 mt-1">{item.phone}</div>
                   <div className="text-sm mt-2 line-clamp-2">{item.lastInboundText}</div>
-                  <div className="text-xs text-orange-600 mt-2">
-                    {item.daysSinceInbound} day(s) since last inbound
+
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
+                    <span className={`text-xs px-2 py-1 rounded-full ${priorityBadge(item.priority)}`}>
+                      {item.priority}
+                    </span>
+                    <span className="text-xs text-orange-600">
+                      {item.daysSinceInbound} day(s) since last inbound
+                    </span>
                   </div>
                 </button>
               ))
@@ -284,11 +469,18 @@ export default function FollowUpPage() {
                 </p>
               </div>
 
-              <div className="p-5 space-y-4 flex-1">
+              <div className="p-5 space-y-4 flex-1 overflow-y-auto">
                 <div>
                   <label className="block text-sm text-gray-500 mb-2">Last inbound message</label>
                   <div className="border rounded-xl p-4 bg-gray-50">
                     {selected.lastInboundText}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-gray-500 mb-2">Recommended template</label>
+                  <div className="border rounded-xl p-4 bg-gray-50 whitespace-pre-wrap">
+                    {selected.recommendedTemplate || 'No follow-up template found.'}
                   </div>
                 </div>
 
@@ -338,6 +530,15 @@ export default function FollowUpPage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function StatCard({ title, value }: { title: string; value: number }) {
+  return (
+    <div className="border rounded-2xl bg-white p-5">
+      <div className="text-sm text-gray-500">{title}</div>
+      <div className="text-3xl font-bold mt-2">{value}</div>
     </div>
   );
 }

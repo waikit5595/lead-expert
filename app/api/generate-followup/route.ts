@@ -3,7 +3,13 @@ import { NextResponse } from 'next/server';
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { name, type, daysSinceInbound, lastInboundText } = body;
+    const {
+      name,
+      type,
+      daysSinceInbound,
+      lastInboundText,
+      recommendedTemplate,
+    } = body;
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
@@ -37,6 +43,7 @@ Your job:
 - If the contact is a lead, encourage light engagement
 - If the contact is a customer, sound more service-oriented
 - Do not invent prices, promotions, or unavailable details
+- If a recommended template is provided, use its style and intent, but still sound natural
             `.trim(),
           },
           {
@@ -46,6 +53,7 @@ Contact name: ${name}
 Contact type: ${type}
 Days since last inbound: ${daysSinceInbound}
 Last inbound message: ${lastInboundText}
+Recommended template: ${recommendedTemplate || 'None'}
 
 Generate one WhatsApp follow-up message only.
             `.trim(),
