@@ -26,12 +26,10 @@ export async function POST(req: Request) {
       );
     }
 
-    const priceId = getPriceId(plan);
-
-    if (!priceId) {
+    if (!process.env.STRIPE_SECRET_KEY) {
       return NextResponse.json(
-        { error: 'Invalid plan or missing Stripe price ID' },
-        { status: 400 }
+        { error: 'Missing STRIPE_SECRET_KEY' },
+        { status: 500 }
       );
     }
 
@@ -39,6 +37,15 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { error: 'Missing NEXT_PUBLIC_APP_URL' },
         { status: 500 }
+      );
+    }
+
+    const priceId = getPriceId(plan);
+
+    if (!priceId) {
+      return NextResponse.json(
+        { error: `Missing Stripe price ID for plan: ${plan}` },
+        { status: 400 }
       );
     }
 
@@ -57,13 +64,32 @@ export async function POST(req: Request) {
         userId,
         plan,
       },
+      subscription_data: {
+        metadata: {
+          userId,
+          plan,
+        },
+      },
     });
 
+    if (!session.url) {
+      return NextResponse.json(
+        { error: 'Stripe session created but no checkout URL returned' },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({ url: session.url });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Stripe checkout error:', error);
+
     return NextResponse.json(
-      { error: 'Failed to create checkout session' },
+      {
+        error:
+          error?.message ||
+          error?.raw?.message ||
+          'Failed to create checkout session',
+      },
       { status: 500 }
     );
   }
